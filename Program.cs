@@ -255,7 +255,7 @@ namespace ConsoleApp2
                     }
                     else if (state.IsAwaitingPointSelection)
                     {
-                        var point = GetPointById(message.Text);
+                        var point = GetPointByName(message.Text);
                         if (point == null)
                         {
                             await _botClient.SendTextMessageAsync(message.Chat.Id, "Пункт продаж не найден. Пожалуйста, выберите пункт продаж из меню.");
@@ -295,6 +295,29 @@ namespace ConsoleApp2
                 Path = filePath,
                 InformationId = userState.InformationId
             });
+        }
+        private static Point GetPointByName(string pointName)
+        {
+            using (var connection = new SqlConnection(ConnectionString))
+            {
+                var command = new SqlCommand("SELECT PointId FROM Points WHERE PointName = @PointName", connection);
+                command.Parameters.AddWithValue("@PointName", pointName);
+                connection.Open();
+
+                using (var reader = command.ExecuteReader())
+                {
+                    if (reader.Read())
+                    {
+                        return new Point
+                        {
+                            PointId = (int)reader["PointId"],
+                            PointName = pointName
+                        };
+                    }
+                }
+            }
+
+            return null;
         }
 
         private static async Task SaveLocationInformationAsync(long chatId, float latitude, float longitude)
@@ -533,7 +556,7 @@ namespace ConsoleApp2
             }
         }
 
-        
+
 
         private static void AddUser(User user)
         {
@@ -579,8 +602,10 @@ namespace ConsoleApp2
             return points;
         }
 
-        private static Point GetPointById(string pointId)
+        private static Point GetPointById(string pointIdS)
         {
+            int pointId;
+            int.TryParse(pointIdS, out pointId);
             using (var connection = new SqlConnection(ConnectionString))
             {
                 var command = new SqlCommand("SELECT * FROM Points WHERE PointId = @PointId", connection);
@@ -608,43 +633,44 @@ namespace ConsoleApp2
     }
 
     public class Information
-    {
-        public int InformationId { get; set; }
-        public DateTime CreatedDate { get; set; }
-        public double Latitude { get; set; }
-        public double Longitude { get; set; }
-        public int UserId { get; set; }
-        public virtual User User { get; set; }
-        public virtual ICollection<Photo> Photos { get; set; }
+        {
+            public int InformationId { get; set; }
+            public DateTime CreatedDate { get; set; }
+            public double Latitude { get; set; }
+            public double Longitude { get; set; }
+            public int UserId { get; set; }
+            public virtual User User { get; set; }
+            public virtual ICollection<Photo> Photos { get; set; }
+        }
+
+        public class Photo
+        {
+            public int PhotoId { get; set; }
+            public string Path { get; set; }
+            public int InformationId { get; set; }
+            public virtual Information Information { get; set; }
+        }
+
+        public class User
+        {
+            public int UserId { get; set; }
+            public string Firstname { get; set; }
+            public string Lastname { get; set; }
+            public string Patronymic { get; set; }
+            public string ChatTelegramId { get; set; }
+            public int PointId { get; set; }
+            public virtual Point Point { get; set; }
+            public virtual ICollection<Information> Informations { get; set; }
+        }
+
+        public class Point
+        {
+            public int PointId { get; set; }
+            public string PointName { get; set; }
+            public string Adress { get; set; }
+            public double Latitude { get; set; }
+            public double Longitude { get; set; }
+            public virtual ICollection<User> Users { get; set; }
+        }
     }
 
-    public class Photo
-    {
-        public int PhotoId { get; set; }
-        public string Path { get; set; }
-        public int InformationId { get; set; }
-        public virtual Information Information { get; set; }
-    }
-
-    public class User
-    {
-        public int UserId { get; set; }
-        public string Firstname { get; set; }
-        public string Lastname { get; set; }
-        public string Patronymic { get; set; }
-        public string ChatTelegramId { get; set; }
-        public int PointId { get; set; }
-        public virtual Point Point { get; set; }
-        public virtual ICollection<Information> Informations { get; set; }
-    }
-
-    public class Point
-    {
-        public int PointId { get; set; }
-        public string PointName { get; set; }
-        public string Adress { get; set; }
-        public double Latitude { get; set; }
-        public double Longitude { get; set; }
-        public virtual ICollection<User> Users { get; set; }
-    }
-}
