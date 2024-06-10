@@ -88,7 +88,11 @@ namespace ConsoleApp2
             {
                 if (long.TryParse(user.ChatTelegramId, out var chatId))
                 {
-                    await _botClient.SendTextMessageAsync(chatId, "Пожалуйста, отправьте 5 фото и вашу геолокацию.");
+                    try { await _botClient.SendTextMessageAsync(chatId, "Пожалуйста, отправьте 5 фото (Отправлять фотографии надо по отдельности, в каждом отдельном сообщении)."); }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(ex);
+                    }
                     _photoCounts[chatId] = 0;
 
                     // Создаем запись Information для каждого пользователя
@@ -109,174 +113,217 @@ namespace ConsoleApp2
             var today = DateTime.Today.Day;
             var informations = GetInformationsForToday(today);
 
-            foreach (var info in informations)
+            // Group information by user
+            var groupedInformations = informations.GroupBy(info => info.User).ToList();
+
+            foreach (var userGroup in groupedInformations)
             {
-                // Проверка на null
-                if (info?.User == null || info.User.Point == null)
-                {
-                    continue; // Пропускаем итерацию, если info или связанные объекты null
-                }
+                var user = userGroup.Key;
 
-                try
+                foreach (var info in userGroup)
                 {
-                    var message = $"Пользователь: {info.User.Firstname} {info.User.Lastname} {info.User.Patronymic}\n" +
-                                  $"Точка: {info.User.Point.PointName} Адрес: {info.User.Point.Adress} Координаты: {info.User.Point.Latitude} {info.User.Point.Longitude} \n" +
-                                  $"Дата: {info.CreatedDate}\n" +
-                                  $"Локация: {info.Latitude}, {info.Longitude}\n" +
-                                  $"Проверка геолокации:  {IsWithinRange(info.Latitude, info.Longitude, info.User.Point.Latitude, info.User.Point.Longitude)}\n";
-                    await _botClient.SendTextMessageAsync(AdminChatId, message);
-                }
-                catch (Exception e)
-                {
-                    Console.WriteLine($"Ошибка при отправке сообщения: {e.Message}");
-                }
+                    // Проверка на null
+                    if (info?.User == null || info.User.Point == null)
+                    {
+                        continue; // Пропускаем итерацию, если info или связанные объекты null
+                    }
 
-                foreach (var photo in info.Photos)
-                {
                     try
                     {
-                        using (var photoStream = new FileStream(photo.Path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                        var message = $"Пользователь: {info.User.Firstname} {info.User.Lastname} {info.User.Patronymic}\n" +
+                                      $"Точка: {info.User.Point.PointName} Адрес: {info.User.Point.Adress} Координаты: {info.User.Point.Latitude} {info.User.Point.Longitude} \n" +
+                                      $"Дата: {info.CreatedDate}\n" +
+                                      $"Локация: {info.Latitude}, {info.Longitude}\n" +
+                                      $"Проверка геолокации:  {IsWithinRange(info.Latitude, info.Longitude, info.User.Point.Latitude, info.User.Point.Longitude)}\n";
+
+                        // Создаем список медиафайлов для отправки
+                        var pathList = new List<string>();
+
+                        // Добавляем каждую фотографию из info.Photos в список медиафайлов
+                        foreach (var photo in info.Photos)
                         {
-                            var inputOnlineFile = new InputOnlineFile(photoStream, Path.GetFileName(photo.Path));
-                            await _botClient.SendPhotoAsync(AdminChatId, inputOnlineFile);
+                            try
+                            {
+                                pathList.Add(photo.Path);
+                            }
+                            catch (Exception e)
+                            {
+                                Console.WriteLine($"Ошибка при добавлении фото в список: {e.Message}");
+                            }
+                        }
+
+                        if (pathList.Count > 0)
+                        {
+                            // Создаем список медиафайлов для отправки
+                            var mediaGroup = new List<IAlbumInputMedia>();
+
+                            // Добавляем первую фотографию с текстом в виде подписи
+                            var fileName = Path.GetFileName(pathList[0]);
+                            var inputOnlineFile = new InputMedia(new FileStream(pathList[0], FileMode.Open, FileAccess.Read), fileName);
+                            var inputMediaPhoto = new InputMediaPhoto(inputOnlineFile) { Caption = message, ParseMode = ParseMode.Html };
+                            mediaGroup.Add(inputMediaPhoto);
+
+                            // Добавляем оставшиеся фотографии без подписи
+                            for (int i = 1; i < pathList.Count; i++)
+                            {
+                                fileName = Path.GetFileName(pathList[i]);
+                                inputOnlineFile = new InputMedia(new FileStream(pathList[i], FileMode.Open, FileAccess.Read), fileName);
+                                inputMediaPhoto = new InputMediaPhoto(inputOnlineFile);
+                                mediaGroup.Add(inputMediaPhoto);
+                            }
+
+                            // Отправляем группу медиафайлов (фотографии) в одном сообщении
+                            await _botClient.SendMediaGroupAsync(AdminChatId, mediaGroup);
                         }
                     }
                     catch (Exception e)
                     {
-                        Console.WriteLine($"Ошибка при отправке фото: {e.Message}");
+                        Console.WriteLine($"Ошибка при отправке сообщения: {e.Message}");
                     }
                 }
             }
         }
 
 
+
+
+
+
+
         private static async void BotOnMessageReceived(object sender, MessageEventArgs e)
         {
-            var message = e.Message;
-
-            if (message.Type == MessageType.Photo)
+            try
             {
-                if (!_photoCounts.ContainsKey(message.Chat.Id))
-                {
-                    return;
-                }
+                var message = e.Message;
 
-                var photoCount = _photoCounts[message.Chat.Id];
-                if (photoCount < 5)
+                if (message.Type == MessageType.Photo)
                 {
-                    var file = await _botClient.GetFileAsync(message.Photo.Last().FileId);
-                    var filePath = $"./photos/{message.Chat.Id}_{file.FileId}.jpg";
-
-                    lock (_fileLock) // блокировка доступа к файлу
+                    if (!_photoCounts.ContainsKey(message.Chat.Id))
                     {
-                        using (var saveImageStream = System.IO.File.Open(filePath, FileMode.Create))
-                        {
-                            _botClient.DownloadFileAsync(file.FilePath, saveImageStream).Wait();
-                        }
-                    }
-
-                    await SavePhotoInformationAsync(message.Chat.Id, filePath);
-
-                    _photoCounts[message.Chat.Id] = photoCount + 1;
-
-                    if (photoCount + 1 == 5)
-                    {
-                        var state = GetOrCreateState(message.Chat.Id);
-                        state.IsAwaitingLocation = true;
-
-                        var locationButton = new KeyboardButton("Отправить геолокацию") { RequestLocation = true };
-                        var replyKeyboardMarkup = new ReplyKeyboardMarkup(locationButton) { ResizeKeyboard = true, OneTimeKeyboard = true };
-                        await _botClient.SendTextMessageAsync(message.Chat.Id, "Пожалуйста, отправьте вашу геолокацию.", replyMarkup: replyKeyboardMarkup);
-                    }
-                }
-            }
-            else if (message.Type == MessageType.Location)
-            {
-                var state = GetOrCreateState(message.Chat.Id);
-                if (_photoCounts.ContainsKey(message.Chat.Id) && _photoCounts[message.Chat.Id] >= 5 && state.IsAwaitingLocation)
-                {
-                    await SaveLocationInformationAsync(message.Chat.Id, (float)message.Location.Latitude, (float)message.Location.Longitude);
-
-                    await _botClient.SendTextMessageAsync(message.Chat.Id, "Спасибо! Ваши данные успешно сохранены.", replyMarkup: new ReplyKeyboardRemove());
-                    _photoCounts.TryRemove(message.Chat.Id, out _);
-                    state.IsAwaitingLocation = false;
-                }
-            }
-
-            else if (message.Type == MessageType.Text)
-            {
-                var existingUser = GetUserById(message.Chat.Id.ToString());
-
-                if (message.Text.Equals("/test", StringComparison.OrdinalIgnoreCase))
-                {
-                    // Вызов метода SendRequests при получении команды /test
-                    await RequestDataFromUsers();
-                }
-                if (message.Text.Equals("/test2", StringComparison.OrdinalIgnoreCase))
-                {
-                    // Вызов метода SendRequests при получении команды /test2
-                    await SendDataToAdmin();
-                }
-                else if (message.Text.StartsWith("/register"))
-                {
-                    if (existingUser != null)
-                    {
-                        await _botClient.SendTextMessageAsync(message.Chat.Id, "Вы уже зарегистрированы.");
                         return;
                     }
 
-                    _registrationStates[message.Chat.Id] = new RegistrationState();
-                    await _botClient.SendTextMessageAsync(message.Chat.Id, "Введите ваше имя:");
-                }
-                else if (_registrationStates.ContainsKey(message.Chat.Id))
-                {
-                    var state = _registrationStates[message.Chat.Id];
+                    var photoCount = _photoCounts[message.Chat.Id];
+                    if (photoCount < 5)
+                    {
+                        var file = await _botClient.GetFileAsync(message.Photo.Last().FileId);
+                        var filePath = $"./photos/{message.Chat.Id}_{file.FileId}.jpg";
 
-                    if (string.IsNullOrEmpty(state.FirstName))
-                    {
-                        state.FirstName = message.Text;
-                        await _botClient.SendTextMessageAsync(message.Chat.Id, "Введите вашу фамилию:");
-                    }
-                    else if (string.IsNullOrEmpty(state.LastName))
-                    {
-                        state.LastName = message.Text;
-                        await _botClient.SendTextMessageAsync(message.Chat.Id, "Введите ваше отчество:");
-                    }
-                    else if (string.IsNullOrEmpty(state.Patronymic))
-                    {
-                        state.Patronymic = message.Text;
-
-                        var points = GetPoints();
-                        var keyboardButtons = points.Select(p => new KeyboardButton(p.PointName)).ToArray();
-                        var replyKeyboardMarkup = new ReplyKeyboardMarkup(keyboardButtons) { ResizeKeyboard = true, OneTimeKeyboard = true };
-
-                        state.IsAwaitingPointSelection = true;
-                        await _botClient.SendTextMessageAsync(message.Chat.Id, "Выберите пункт продаж:", replyMarkup: replyKeyboardMarkup);
-                    }
-                    else if (state.IsAwaitingPointSelection)
-                    {
-                        var point = GetPointByName(message.Text);
-                        if (point == null)
+                        lock (_fileLock) // блокировка доступа к файлу
                         {
-                            await _botClient.SendTextMessageAsync(message.Chat.Id, "Пункт продаж не найден. Пожалуйста, выберите пункт продаж из меню.");
-                        }
-                        else
-                        {
-                            AddUser(new User
+                            using (var saveImageStream = System.IO.File.Open(filePath, FileMode.Create))
                             {
-                                Firstname = state.FirstName,
-                                Lastname = state.LastName,
-                                Patronymic = state.Patronymic,
-                                ChatTelegramId = message.Chat.Id.ToString(),
-                                PointId = point.PointId
-                            });
+                                _botClient.DownloadFileAsync(file.FilePath, saveImageStream).Wait();
+                            }
+                        }
 
-                            _registrationStates.TryRemove(message.Chat.Id, out _);
+                        await SavePhotoInformationAsync(message.Chat.Id, filePath);
 
-                            await _botClient.SendTextMessageAsync(message.Chat.Id, "Вы успешно зарегистрированы.", replyMarkup: new ReplyKeyboardRemove());
+                        _photoCounts[message.Chat.Id] = photoCount + 1;
+
+                        if (photoCount + 1 == 5)
+                        {
+                            var state = GetOrCreateState(message.Chat.Id);
+                            state.IsAwaitingLocation = true;
+
+                            var locationButton = new KeyboardButton("Отправить геолокацию") { RequestLocation = true };
+                            var replyKeyboardMarkup = new ReplyKeyboardMarkup(locationButton) { ResizeKeyboard = true, OneTimeKeyboard = true };
+                            await _botClient.SendTextMessageAsync(message.Chat.Id, "Пожалуйста, отправьте вашу геолокацию.", replyMarkup: replyKeyboardMarkup);
                         }
                     }
                 }
+                else if (message.Type == MessageType.Location)
+                {
+                    var state = GetOrCreateState(message.Chat.Id);
+                    if (_photoCounts.ContainsKey(message.Chat.Id) && _photoCounts[message.Chat.Id] >= 5 && state.IsAwaitingLocation)
+                    {
+                        await SaveLocationInformationAsync(message.Chat.Id, (float)message.Location.Latitude, (float)message.Location.Longitude);
+
+                        await _botClient.SendTextMessageAsync(message.Chat.Id, "Спасибо! Ваши данные успешно сохранены.", replyMarkup: new ReplyKeyboardRemove());
+                        _photoCounts.TryRemove(message.Chat.Id, out _);
+                        state.IsAwaitingLocation = false;
+                    }
+                }
+
+                else if (message.Type == MessageType.Text)
+                {
+                    var existingUser = GetUserById(message.Chat.Id.ToString());
+
+                    if (message.Text.Equals("/test", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Вызов метода SendRequests при получении команды /test
+                        await RequestDataFromUsers();
+                    }
+                    if (message.Text.Equals("/test2", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Вызов метода SendRequests при получении команды /test2
+                        await SendDataToAdmin();
+                    }
+                    else if (message.Text.StartsWith("/register"))
+                    {
+                        if (existingUser != null)
+                        {
+                            await _botClient.SendTextMessageAsync(message.Chat.Id, "Вы уже зарегистрированы.");
+                            return;
+                        }
+
+                        _registrationStates[message.Chat.Id] = new RegistrationState();
+                        await _botClient.SendTextMessageAsync(message.Chat.Id, "Введите ваше имя:");
+                    }
+                    else if (_registrationStates.ContainsKey(message.Chat.Id))
+                    {
+                        var state = _registrationStates[message.Chat.Id];
+
+                        if (string.IsNullOrEmpty(state.FirstName))
+                        {
+                            state.FirstName = message.Text;
+                            await _botClient.SendTextMessageAsync(message.Chat.Id, "Введите вашу фамилию:");
+                        }
+                        else if (string.IsNullOrEmpty(state.LastName))
+                        {
+                            state.LastName = message.Text;
+                            await _botClient.SendTextMessageAsync(message.Chat.Id, "Введите ваше отчество:");
+                        }
+                        else if (string.IsNullOrEmpty(state.Patronymic))
+                        {
+                            state.Patronymic = message.Text;
+
+                            var points = GetPoints();
+                            var keyboardButtons = points.Select(p => new KeyboardButton(p.PointName)).ToArray();
+                            var replyKeyboardMarkup = new ReplyKeyboardMarkup(keyboardButtons) { ResizeKeyboard = true, OneTimeKeyboard = true };
+
+                            state.IsAwaitingPointSelection = true;
+                            await _botClient.SendTextMessageAsync(message.Chat.Id, "Выберите пункт продаж:", replyMarkup: replyKeyboardMarkup);
+                        }
+                        else if (state.IsAwaitingPointSelection)
+                        {
+                            var point = GetPointByName(message.Text);
+                            if (point == null)
+                            {
+                                await _botClient.SendTextMessageAsync(message.Chat.Id, "Пункт продаж не найден. Пожалуйста, выберите пункт продаж из меню.");
+                            }
+                            else
+                            {
+                                AddUser(new User
+                                {
+                                    Firstname = state.FirstName,
+                                    Lastname = state.LastName,
+                                    Patronymic = state.Patronymic,
+                                    ChatTelegramId = message.Chat.Id.ToString(),
+                                    PointId = point.PointId
+                                });
+
+                                _registrationStates.TryRemove(message.Chat.Id, out _);
+
+                                await _botClient.SendTextMessageAsync(message.Chat.Id, "Вы успешно зарегистрированы.", replyMarkup: new ReplyKeyboardRemove());
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.ToString());
             }
         }
 
@@ -482,7 +529,10 @@ namespace ConsoleApp2
             using (var connection = new SqlConnection(ConnectionString))
             {
                 var command = new SqlCommand(@"
-            SELECT i.*, u.*, p.*, ph.*
+            SELECT i.*, 
+                   u.UserId AS UserId, u.Firstname AS UserFirstname, u.Lastname AS UserLastname, u.Patronymic AS UserPatronymic, 
+                   p.PointId AS PointId, p.PointName AS PointName, p.Adress AS PointAdress, p.Latitude AS PointLatitude, p.Longitude AS PointLongitude,
+                   ph.PhotoId AS PhotoId, ph.Path AS PhotoPath
             FROM Information i
             LEFT JOIN Users u ON i.UserId = u.UserId
             LEFT JOIN Points p ON u.PointId = p.PointId
@@ -509,16 +559,16 @@ namespace ConsoleApp2
                                 User = new User
                                 {
                                     UserId = (int)reader["UserId"],
-                                    Firstname = reader["Firstname"].ToString(),
-                                    Lastname = reader["Lastname"].ToString(),
-                                    Patronymic = reader["Patronymic"].ToString(),
+                                    Firstname = reader["UserFirstname"].ToString(),
+                                    Lastname = reader["UserLastname"].ToString(),
+                                    Patronymic = reader["UserPatronymic"].ToString(),
                                     Point = new Point
                                     {
                                         PointId = (int)reader["PointId"],
                                         PointName = reader["PointName"].ToString(),
-                                        Adress = reader["Adress"].ToString(),
-                                        Latitude = (double)reader["Latitude"],
-                                        Longitude = (double)reader["Longitude"]
+                                        Adress = reader["PointAdress"].ToString(),
+                                        Latitude = (double)reader["PointLatitude"],
+                                        Longitude = (double)reader["PointLongitude"]
                                     }
                                 },
                                 Photos = new List<Photo>()
@@ -531,7 +581,7 @@ namespace ConsoleApp2
                             info.Photos.Add(new Photo
                             {
                                 PhotoId = (int)reader["PhotoId"],
-                                Path = reader["Path"].ToString()
+                                Path = reader["PhotoPath"].ToString()
                             });
                         }
                     }
@@ -542,6 +592,7 @@ namespace ConsoleApp2
 
             return informations;
         }
+
 
         private static void AddPhoto(Photo photo)
         {
@@ -633,44 +684,44 @@ namespace ConsoleApp2
     }
 
     public class Information
-        {
-            public int InformationId { get; set; }
-            public DateTime CreatedDate { get; set; }
-            public double Latitude { get; set; }
-            public double Longitude { get; set; }
-            public int UserId { get; set; }
-            public virtual User User { get; set; }
-            public virtual ICollection<Photo> Photos { get; set; }
-        }
-
-        public class Photo
-        {
-            public int PhotoId { get; set; }
-            public string Path { get; set; }
-            public int InformationId { get; set; }
-            public virtual Information Information { get; set; }
-        }
-
-        public class User
-        {
-            public int UserId { get; set; }
-            public string Firstname { get; set; }
-            public string Lastname { get; set; }
-            public string Patronymic { get; set; }
-            public string ChatTelegramId { get; set; }
-            public int PointId { get; set; }
-            public virtual Point Point { get; set; }
-            public virtual ICollection<Information> Informations { get; set; }
-        }
-
-        public class Point
-        {
-            public int PointId { get; set; }
-            public string PointName { get; set; }
-            public string Adress { get; set; }
-            public double Latitude { get; set; }
-            public double Longitude { get; set; }
-            public virtual ICollection<User> Users { get; set; }
-        }
+    {
+        public int InformationId { get; set; }
+        public DateTime CreatedDate { get; set; }
+        public double Latitude { get; set; }
+        public double Longitude { get; set; }
+        public int UserId { get; set; }
+        public virtual User User { get; set; }
+        public virtual ICollection<Photo> Photos { get; set; }
     }
+
+    public class Photo
+    {
+        public int PhotoId { get; set; }
+        public string Path { get; set; }
+        public int InformationId { get; set; }
+        public virtual Information Information { get; set; }
+    }
+
+    public class User
+    {
+        public int UserId { get; set; }
+        public string Firstname { get; set; }
+        public string Lastname { get; set; }
+        public string Patronymic { get; set; }
+        public string ChatTelegramId { get; set; }
+        public int PointId { get; set; }
+        public virtual Point Point { get; set; }
+        public virtual ICollection<Information> Informations { get; set; }
+    }
+
+    public class Point
+    {
+        public int PointId { get; set; }
+        public string PointName { get; set; }
+        public string Adress { get; set; }
+        public double Latitude { get; set; }
+        public double Longitude { get; set; }
+        public virtual ICollection<User> Users { get; set; }
+    }
+}
 
