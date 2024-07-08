@@ -43,7 +43,7 @@ namespace ConsoleApp2
         static async Task Main(string[] args)
         {
             // Инициализация клиента бота
-            _botClient = new TelegramBotClient("6565397184:AAEIgeI2tRkmM16vEhtesbgbxfEXIMiBdmQ");
+            _botClient = new TelegramBotClient("API KEY");
 
             // Запуск обработчика сообщений
             _botClient.OnMessage += BotOnMessageReceived;
