@@ -37,7 +37,7 @@ namespace ConsoleApp2
         private static ConcurrentDictionary<long, UserState> _userStates = new ConcurrentDictionary<long, UserState>();
         private static ConcurrentDictionary<long, int> _photoCounts = new ConcurrentDictionary<long, int>();
         private static readonly object _fileLock = new object();
-        private const long AdminChatId = -4210112235; // Замените на нужный ChatID администратора
+        private const long AdminChatId = /*admin chatID */; // Замените на нужный ChatID администратора
         private const string ConnectionString = @"Data Source=.\SQLEXPRESS;Initial Catalog=telegrambot;Integrated Security=True"; // Замените на строку подключения к вашей базе данных
 
         static async Task Main(string[] args)
